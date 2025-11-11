@@ -5,8 +5,8 @@ import Speaker from "speaker";
 
 // Parse arguments
 const file = process.argv[2];
-const virtualRate = parseInt(process.argv[3] || "8000", 10); // Virtual rate for bytebeat formula
-const outputRate = 44100; // Fixed output rate for fast Windows buffer drain
+const virtualRate = parseInt(process.argv[3] || "8000", 10);
+const outputRate = 44100;
 
 if (!file) {
   console.error("Usage: bytebeat <formula.js> [rate]");
@@ -14,17 +14,11 @@ if (!file) {
   console.error("Arguments:");
   console.error("  formula.js - Path to your bytebeat formula");
   console.error("  rate       - Virtual sample rate for formula (default: 8000)");
-  console.error("               Lower = classic bytebeat sound, Higher = cleaner sound");
   console.error("");
-  console.error("Examples:");
-  console.error("  node bytebeat.js formula.js              # 8kHz classic bytebeat");
-  console.error("  node bytebeat.js formula.js 44100        # High quality");
-  console.error("");
-  console.error("Note: Audio always outputs at 44100 Hz for low latency (~1s reload)");
+  console.error("Examples: node bytebeat.js examples\\steady-on-tim.js 44000");
   process.exit(1);
 }
 
-// Fixed 44100 Hz output for fast buffer drain = lower reload latency
 const speaker = new Speaker({
   channels: 1,
   sampleRate: outputRate,
@@ -42,13 +36,30 @@ console.log(`[init] virtual rate: ${virtualRate} Hz, output: ${outputRate} Hz`);
 
 // Audio state
 let currentScript = null;
-const context = createContext({ t: 0, Math });
+
+const context = createContext({
+  t: 0,
+  Math,
+  sin: Math.sin,
+  cos: Math.cos,
+  tan: Math.tan,
+  abs: Math.abs,
+  floor: Math.floor,
+  ceil: Math.ceil,
+  round: Math.round,
+  min: Math.min,
+  max: Math.max,
+  pow: Math.pow,
+  sqrt: Math.sqrt,
+  random: Math.random,
+  PI: Math.PI,
+  E: Math.E
+});
+
 let t = 0;
-
-// Generation counter to stop stale render loops
+let errorCount = 0;
+const MAX_ERRORS_SHOWN = 5;
 let generation = 0;
-
-// Compile and hot-swap formula
 let lastCode = null;
 
 function compileFormula() {
@@ -61,6 +72,7 @@ function compileFormula() {
     
     currentScript = newScript;
     t = 0;
+    errorCount = 0;
     console.log(`[reloaded] ${new Date().toLocaleTimeString()}`);
     
   } catch (err) {
@@ -68,30 +80,25 @@ function compileFormula() {
   }
 }
 
-// Use watchFile for stable behavior on Windows
 watchFile(file, { interval: 200 }, compileFormula);
 compileFormula();
 
-// Sample rate conversion: virtual rate -> 44100 Hz output
-const BUFFER_SIZE = 512; // Output buffer size (at 44100 Hz)
+const BUFFER_SIZE = 512;
 const BYTES_PER_BUFFER = BUFFER_SIZE * 2;
 const TARGET_QUEUED_BYTES = BYTES_PER_BUFFER * 1;
-const sampleRatio = virtualRate / outputRate; // How many virtual samples per output sample
+const sampleRatio = virtualRate / outputRate;
 
 function fillBuffer(gen) {
-  // Stop if this loop is stale
   if (gen !== generation) return;
   
   if (!currentScript) {
     return setTimeout(() => fillBuffer(gen), 10);
   }
 
-  // Generate output buffer with sample rate conversion
   while (speaker.writableLength < TARGET_QUEUED_BYTES) {
     const buffer = Buffer.allocUnsafe(BYTES_PER_BUFFER);
     
     for (let i = 0; i < BUFFER_SIZE; i++) {
-      // Calculate which virtual sample this output sample corresponds to
       const virtualSampleIndex = Math.floor(t * sampleRatio);
       context.t = virtualSampleIndex;
       
@@ -99,11 +106,18 @@ function fillBuffer(gen) {
         const u = currentScript.runInContext(context) & 255;
         const s = ((u - 128) << 8);
         buffer.writeInt16LE(s, i * 2);
-      } catch {
+      } catch (e) {
+        if (errorCount < MAX_ERRORS_SHOWN) {
+          console.error(`[runtime error @ t=${virtualSampleIndex}]`, e.message);
+          errorCount++;
+          if (errorCount === MAX_ERRORS_SHOWN) {
+            console.error("[runtime error] (suppressing further errors...)");
+          }
+        }
         buffer.writeInt16LE(0, i * 2);
       }
       
-      t++; // Increment output sample counter
+      t++;
     }
 
     if (!speaker.write(buffer)) {
@@ -114,5 +128,4 @@ function fillBuffer(gen) {
   setImmediate(() => fillBuffer(gen));
 }
 
-// Start the render loop
 fillBuffer(generation);
