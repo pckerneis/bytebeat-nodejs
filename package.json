@@ -5,6 +5,7 @@
   "type": "module",
   "bin": { "bytebeat": "./bytebeat.js" },
   "dependencies": {
-    "speaker": "^0.5.5"
+    "speaker": "^0.5.5",
+    "commander": "^12.0.0"
   }
 }

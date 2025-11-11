@@ -2,21 +2,20 @@
 import { readFileSync, watchFile } from "fs";
 import { Script, createContext } from "vm";
 import Speaker from "speaker";
+import { program } from "commander";
 
-const file = process.argv[2];
-const virtualRate = parseInt(process.argv[3] || "8000", 10);
+program
+  .name("bytebeat")
+  .description("Real-time bytebeat player with live code reloading")
+  .argument("<formula>", "path to bytebeat formula file")
+  .option("-r, --rate <hz>", "virtual sample rate in Hz", "8000")
+  .option("-b, --buffers <n>", "number of buffers to queue", "2")
+  .parse();
+
+const file = program.args[0];
+const virtualRate = parseInt(program.opts().rate);
+const queuedBuffers = parseInt(program.opts().buffers);
 const outputRate = 44100;
-
-if (!file) {
-  console.error(`Usage: bytebeat <formula.js> [rate]
-
-Arguments:
-  formula.js - Path to your bytebeat formula
-  rate       - Virtual sample rate for formula (default: 8000)
-
-Examples: node bytebeat.js examples\\steady-on-tim.js 44000`);
-  process.exit(1);
-}
 
 const speaker = new Speaker({
   channels: 1,
@@ -31,7 +30,7 @@ speaker.on("error", (err) => {
   process.exit(1);
 });
 
-console.log(`[init] virtual rate: ${virtualRate} Hz, output: ${outputRate} Hz`);
+console.log(`[init] virtual: ${virtualRate} Hz, output: ${outputRate} Hz, buffers: ${queuedBuffers}`);
 
 let currentScript = null, t = 0, generation = 0, lastCode = null, errorCount = 0;
 const MAX_ERRORS_SHOWN = 5;
@@ -47,7 +46,6 @@ function compileFormula() {
     lastCode = code;
     
     currentScript = newScript;
-    t = 0;
     errorCount = 0;
     console.log(`[reloaded] ${new Date().toLocaleTimeString()}`);
     
@@ -61,7 +59,7 @@ compileFormula();
 
 const BUFFER_SIZE = 512;
 const BYTES_PER_BUFFER = BUFFER_SIZE * 2;
-const TARGET_QUEUED_BYTES = BYTES_PER_BUFFER;
+const TARGET_QUEUED_BYTES = BYTES_PER_BUFFER * queuedBuffers;
 const sampleRatio = virtualRate / outputRate;
 
 function fillBuffer(gen) {
