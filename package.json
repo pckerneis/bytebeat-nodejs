@@ -4,8 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "bin": { "bytebeat": "./bytebeat.js" },
+  "engines": {
+    "node": ">=12.20.0"
+  },
   "dependencies": {
     "speaker": "^0.5.5",
-    "commander": "^12.0.0"
+    "commander": "^9.0.0"
   }
 }

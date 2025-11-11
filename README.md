@@ -24,7 +24,7 @@ Supports **live code reload** — edit your formula file and the sound updates i
 ## Installation
 
 **Prerequisites:**
-- Node.js (v14+)
+- Node.js v12.20+ (for ES modules support)
 
 Clone and install dependencies:
 
