@@ -1,0 +1,10 @@
+{
+  "name": "bytebeat-nodejs",
+  "author": "pckerneis",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": { "bytebeat": "./bytebeat.js" },
+  "dependencies": {
+    "speaker": "^0.5.5"
+  }
+}
