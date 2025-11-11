@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-import { readFileSync, watch } from "fs";
+import { readFileSync, watchFile } from "fs";
 import { Script, createContext } from "vm";
 import Speaker from "speaker";
 
-// --- CLI args ---
 const file = process.argv[2];
 const rate = parseInt(process.argv[3] || "8000", 10);
 
@@ -12,66 +11,88 @@ if (!file) {
   process.exit(1);
 }
 
-// --- Globals ---
+// Single persistent speaker instance
+const speaker = new Speaker({
+  channels: 1,
+  sampleRate: rate,
+  bitDepth: 16,
+  signed: true,
+  highWaterMark: 8192
+});
+
+speaker.on("error", (err) => {
+  console.error("[speaker error]", err.message);
+  process.exit(1);
+});
+
+// Audio state
 let currentScript = null;
-let context = { t: 0, Math };
+const context = createContext({ t: 0, Math });
+let t = 0;
 
-// --- Helper to create a new speaker instance ---
-function createSpeaker() {
-  return new Speaker({
-    channels: 1,
-    sampleRate: rate,
-    bitDepth: 16,
-    signed: true
-  });
-}
+// Generation counter to stop stale render loops
+let generation = 0;
 
-let speaker = createSpeaker();
+// Compile and hot-swap formula
+let lastCode = null;
 
-// --- Compile formula ---
 function compileFormula() {
   try {
     const code = readFileSync(file, "utf8").trim();
-    if (!code) throw new Error("Empty formula");
-    currentScript = new Script(`(${code}) & 255`);
+    if (!code || code === lastCode) return;
+    
+    const newScript = new Script(`(${code}) & 255`);
+    lastCode = code;
+    currentScript = newScript;
     console.log(`[reloaded] ${new Date().toLocaleTimeString()}`);
-
-    // Reset playback immediately (flush queued audio)
-    speaker.end();
-    speaker = createSpeaker();
+    // Note: t continues incrementing for smooth playback
+    // To reset time on reload, uncomment: t = 0;
   } catch (err) {
     console.error("[compile error]", err.message);
   }
 }
 
-// --- Watch for changes instantly ---
-watch(file, { persistent: true }, compileFormula);
+// Use watchFile for stable behavior on Windows
+watchFile(file, { interval: 200 }, compileFormula);
 compileFormula();
 
-// --- Playback loop ---
-const BUFFER_SIZE = 1024;
-const buffer = Buffer.alloc(BUFFER_SIZE * 2);
-let t = 0;
+// Single persistent render loop
+const BUFFER_SIZE = 2048;
+const BYTES_PER_BUFFER = BUFFER_SIZE * 2;
+const TARGET_QUEUED_BYTES = BYTES_PER_BUFFER * 4; // Keep ~4 buffers queued for smooth timing
 
-function fillBuffer() {
-  if (!currentScript) return setTimeout(fillBuffer, 100);
+function fillBuffer(gen) {
+  // Stop if this loop is stale
+  if (gen !== generation) return;
+  
+  if (!currentScript) {
+    return setTimeout(() => fillBuffer(gen), 100);
+  }
 
-  for (let i = 0; i < BUFFER_SIZE; i++) {
-    context.t = t++;
-    try {
-      const u = currentScript.runInNewContext(context) & 255;
-      const s = ((u - 128) << 8);
-      buffer.writeInt16LE(s, i * 2);
-    } catch {
-      const u = 128;
-      const s = ((u - 128) << 8); // silence on error
-      buffer.writeInt16LE(s, i * 2);
+  // Keep the speaker buffer consistently filled for smooth timing
+  while (speaker.writableLength < TARGET_QUEUED_BYTES) {
+    const buffer = Buffer.allocUnsafe(BYTES_PER_BUFFER);
+    
+    for (let i = 0; i < BUFFER_SIZE; i++) {
+      context.t = t++;
+      try {
+        const u = currentScript.runInContext(context) & 255;
+        const s = ((u - 128) << 8);
+        buffer.writeInt16LE(s, i * 2);
+      } catch {
+        buffer.writeInt16LE(0, i * 2); // silence on error
+      }
+    }
+
+    if (!speaker.write(buffer)) {
+      // Hit backpressure, wait for drain
+      return speaker.once("drain", () => fillBuffer(gen));
     }
   }
 
-  const ok = speaker.write(buffer);
-  if (ok) setImmediate(fillBuffer);
-  else speaker.once("drain", fillBuffer);
+  // Schedule next top-up
+  setImmediate(() => fillBuffer(gen));
 }
 
-fillBuffer();
+// Start the single render loop
+fillBuffer(generation);
